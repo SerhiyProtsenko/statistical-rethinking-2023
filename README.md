@@ -1,39 +1,116 @@
 # Statistical Rethinking 2023 in Python
-Python/PyMC 5 implementations of Richard McElreath's outstanding lecture series [Statistical Rethinking 2023](https://www.youtube.com/playlist?list=PLDcUM9US4XdPz-KxHM4XHt7uUVGWWVSus).
 
+Python/PyMC implementations of Richard McElreath's lecture series
+[Statistical Rethinking 2023](https://www.youtube.com/playlist?list=PLDcUM9US4XdPz-KxHM4XHt7uUVGWWVSus).
 
+## Setup with uv
 
+The notebooks use Python 3.13, PyMC 6, PyTensor 3, ArviZ 1, NumPy 2 and
+pandas 3. `pyproject.toml` declares the dependencies and `uv.lock` records the
+resolved versions. The old Conda YAML is retained only as a historical snapshot;
+it is not used by this setup.
 
-## Setup
-All notebooks were developed on a Mac laptop with M1 Pro ARM64 chipset. The python environment is managed using [miniconda](https://docs.conda.io/en/latest/miniconda.html). If you are on a similar hardware setup, you can initialize the environment via the standard conda workflow:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if needed.
+On macOS, install Graphviz's `dot` executable and a C++ compiler:
 
 ```bash
-$ conda env create -f statistical-rethinking-2023.yml
-$ conda activate statistical-rethinking-2023
+brew install graphviz
+# Only if Xcode Command Line Tools are not already installed:
+xcode-select --install
 ```
-Otherwise, the Python version and standard packages that are imported in the notebooks via the `init_notebook.py` script are as follows:
 
+From the repository root:
+
+```bash
+uv python install 3.13
+uv sync --locked
+uv pip check
+uv run python -m ipykernel install --user \
+  --name statistical-rethinking-2023-uv \
+  --display-name "Statistical Rethinking — uv"
+uv run jupyter lab
 ```
-Watermark:
-----------
-Python implementation: CPython
-Python version       : 3.10.12
-IPython version      : 8.15.0
 
-Compiler    : Clang 15.0.7 
-OS          : Darwin
-Release     : 22.2.0
-Machine     : arm64
-Processor   : arm
-CPU cores   : 10
-Architecture: 64bit
+Select **Statistical Rethinking — uv** as the notebook kernel. No environment
+activation is needed for `uv run`.
 
-statsmodels: 0.14.0
-numpy      : 1.24.4
-arviz      : 0.16.1
-scipy      : 1.11.2
-pymc       : 5.8.0
-pandas     : 2.1.0
-xarray     : 2023.8.0
-matplotlib : 3.7.2
+In VS Code, open this repository as a folder and install the Microsoft
+**Python** (`ms-python.python`) and **Jupyter** (`ms-toolsai.jupyter`) extensions.
+The recommended extensions and default interpreter are configured in `.vscode/`.
+After installing extensions, run **Developer: Reload Window** from the Command
+Palette. In the notebook, choose **Select Kernel → Select Another Kernel…**,
+then select **Statistical Rethinking — uv** under **Jupyter Kernels**, or select
+the repository's `.venv` under **Python Environments**. VS Code may show the
+environment as `.venv (Python 3.13.16)` instead of the registered kernel name.
+If a different Python interpreter was previously selected for this workspace,
+run **Python: Select Interpreter → Enter interpreter path…** and choose
+`.venv/bin/python`.
+
+Run each lecture from its first cell, in order. The first cell loads the common
+imports, plotting style and version information from `init_notebook.py`.
+Notebook outputs are cleared so the displayed results come from your current
+kernel rather than the original 2023 environment.
+
+## Updating dependencies
+
+```bash
+uv lock --upgrade
+uv sync
+uv pip check
 ```
+
+Keep `pyproject.toml`, `.python-version` and `uv.lock` in version control;
+`.venv` is ignored. The resolver selects mutually compatible releases. For
+example, PyTensor 3.3.3 limits Numba to 0.67 even though a newer Numba release
+exists.
+
+## Modern APIs and lecture figures
+
+PyMC sampling returns `xarray.DataTree`. The notebooks explicitly obtain group
+Datasets with `.to_dataset()` where they perform Dataset operations.
+`pm.Data` replaces the removed `pm.MutableData`.
+
+The shared `utils.plot_density`, `utils.plot_interval` and `utils.plot_forest`
+functions keep the lectures' Matplotlib subplot layouts while using current
+ArviZ KDE/HDI calculations. Numeric KDE bandwidths remain absolute.
+Diagnostic plots use the current ArviZ plotting API. Intervals are explicitly
+highest-density intervals; the common default remains the lectures' 94%.
+
+ArviZ 1 compares models on the log ELPD scale. Lecture 12 converts ELPD and its
+standard error to deviance explicitly. Lecture 07 retains an explicit pointwise
+WAIC calculation for its educational outlier comparison because ArviZ 1 no
+longer exposes the old `az.waic` function.
+
+## Validation
+
+The migration was validated on macOS ARM64 with the locked environment:
+all 19 notebooks executed successfully in smoke mode, Lecture 03 also executed
+with its original sampling settings, and all five helper regression tests passed.
+
+Check the statistical/plotting helpers:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+Execute every notebook with shorter MCMC runs:
+
+```bash
+uv run python scripts/check_notebooks.py --smoke
+```
+
+This executes all cells with 100 draws and 100 tuning steps per chain. It checks
+API compatibility and execution, not posterior convergence or scientific
+conclusions. The original notebooks' sampling settings are not modified.
+
+To execute the original sampling settings, omit `--smoke`. You can also select
+one notebook:
+
+```bash
+uv run python scripts/check_notebooks.py \
+  "Lecture 03 - Geocentric Models.ipynb"
+```
+
+Executed copies and reports are written under `.cache/smoke/` or `.cache/full/`,
+including any figures generated by the checks. Full runs of the multilevel, Gaussian
+process and differential-equation models can take considerably longer.

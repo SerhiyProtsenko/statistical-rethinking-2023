@@ -3,13 +3,14 @@ import pandas as pd
 import numpy as np
 import pymc as pm
 import arviz as az
+import xarray as xr
 import graphviz as gr
 import networkx as nx
 from matplotlib import pyplot as plt
 from pathlib import Path
 from typing import List, Union, Callable
 
-HERE = Path(".")
+HERE = Path(__file__).resolve().parent
 
 
 def load_data(dataset, delimiter=";"):
@@ -49,6 +50,107 @@ def invlogit(x: float) -> float:
     return 1 / (1 + np.exp(-x))
 
 
+def plot_density(
+    values, values2=None, *, ax=None, color="C0", label=None,
+    bw="experimental", plot_kwargs=None, contourf_kwargs=None,
+):
+    """Draw an ArviZ 1 KDE on a Matplotlib axis used by the lectures.
+
+    Numeric bandwidths remain absolute, as in the original lecture figures.
+    Returning the axis allows callers to shade regions under the density.
+    """
+    ax = plt.gca() if ax is None else ax
+    values = np.asarray(values).ravel()
+    if values2 is not None:
+        from seaborn import kdeplot
+
+        options = {"cmap": "Blues", **(contourf_kwargs or {})}
+        kdeplot(x=values, y=np.asarray(values2).ravel(), fill=True, ax=ax, **options)
+    elif np.issubdtype(values.dtype, np.integer):
+        options = {"color": color, "label": label, **(plot_kwargs or {})}
+        ax.hist(values, bins=np.arange(values.min(), values.max() + 2) - 0.5,
+                density=True, **options)
+    elif np.ptp(values[np.isfinite(values)]) == 0:
+        ax.axvline(values[np.isfinite(values)][0], color=color, label=label,
+                   **(plot_kwargs or {}))
+    else:
+        xs, density, _ = az.kde(values, bw=bw)
+        ax.plot(xs, density, color=color, label=label, **(plot_kwargs or {}))
+    return ax
+
+
+def plot_interval(x, y, *, prob=0.94, color="C1", fill_kwargs=None, ax=None):
+    """Plot pointwise HDIs over chain and draw using the current ArviZ API."""
+    ax = plt.gca() if ax is None else ax
+    if not isinstance(y, xr.DataArray):
+        y = xr.DataArray(np.asarray(y), dims=("chain", "draw", "observation"))
+    interval = az.hdi(y, prob=prob, dim=["chain", "draw"])
+    xs = np.asarray(x).ravel()
+    order = np.argsort(xs)
+    lower = np.asarray(interval.sel(ci_bound="lower")).ravel()[order]
+    upper = np.asarray(interval.sel(ci_bound="upper")).ravel()[order]
+    ax.fill_between(xs[order], lower, upper, color=color, **(fill_kwargs or {}))
+    return ax
+
+
+def plot_forest(inference, *, var_names=None, combined=True, prob=0.94, ax=None):
+    """Plot parameter medians and 50%/requested HDIs in existing subplots."""
+    if isinstance(inference, xr.DataTree):
+        posterior = inference["posterior"].to_dataset()
+    else:
+        posterior = inference
+    if var_names is None:
+        var_names = list(posterior.data_vars)
+    elif isinstance(var_names, str):
+        var_names = [var_names]
+    labels, medians, outer, inner = [], [], [], []
+    sample_dims = ["chain", "draw"] if combined else ["draw"]
+    for name in var_names:
+        values = posterior[name]
+        parameter_dims = [dim for dim in values.dims if dim not in sample_dims]
+        median = values.median(dim=sample_dims)
+        wide = az.hdi(values, prob=prob, dim=sample_dims)
+        narrow = az.hdi(values, prob=0.5, dim=sample_dims)
+        for index in np.ndindex(*(values.sizes[dim] for dim in parameter_dims)):
+            selection = dict(zip(parameter_dims, index))
+            coords = [str(values[dim].values[ii]) for dim, ii in selection.items()]
+            labels.append(name + (f"[{', '.join(coords)}]" if coords else ""))
+            medians.append(float(median.isel(selection)))
+            outer.append(np.asarray(wide.isel(selection)))
+            inner.append(np.asarray(narrow.isel(selection)))
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, max(3, 0.3 * len(labels))))
+    positions = np.arange(len(labels))
+    outer, inner = np.asarray(outer), np.asarray(inner)
+    ax.hlines(positions, outer[:, 0], outer[:, 1], color="C0", linewidth=1.5)
+    ax.hlines(positions, inner[:, 0], inner[:, 1], color="C0", linewidth=4)
+    ax.scatter(medians, positions, color="C0", s=25, zorder=3)
+    ax.set_yticks(positions, labels)
+    ax.invert_yaxis()
+    return ax
+
+
+def pointwise_waic(inference, var_name=None):
+    """Pointwise log-scale WAIC, retained for the Lecture 07 comparison.
+
+    ArviZ 1 provides PSIS-LOO instead of WAIC. The educational WAIC calculation
+    is log(mean(exp(log_likelihood))) minus var(log_likelihood), over draws.
+    """
+    from scipy.special import logsumexp
+
+    likelihood = inference["log_likelihood"].to_dataset()
+    if var_name is None:
+        if len(likelihood.data_vars) != 1:
+            raise ValueError("Select var_name when there are multiple likelihoods")
+        var_name = next(iter(likelihood.data_vars))
+    samples = likelihood[var_name].stack(sample=("chain", "draw"))
+    lppd = xr.apply_ufunc(
+        logsumexp, samples, input_core_dims=[["sample"]],
+        kwargs={"axis": -1},
+    ) - np.log(samples.sizes["sample"])
+    return lppd - samples.var(dim="sample")
+
+
 def draw_causal_graph(
     edge_list, node_props=None, edge_props=None, graph_direction="UD"
 ):
@@ -86,7 +188,7 @@ def plot_line(xs, ys, **plot_kwargs):
     background_plot_kwargs = {k: v for k, v in plot_kwargs.items()}
     background_plot_kwargs["linewidth"] = linewidth + 2
     background_plot_kwargs["color"] = "white"
-    del background_plot_kwargs["label"]  # no legend label for background
+    background_plot_kwargs.pop("label", None)  # no legend label for background
 
     plt.plot(xs, ys, **background_plot_kwargs, zorder=30)
     plt.plot(xs, ys, **plot_kwargs, zorder=31)
@@ -238,7 +340,7 @@ def plot_pymc_distribution(distribution: pm.Distribution, **distribution_params)
     with pm.Model() as _:
         d = distribution(name=distribution.__name__, **distribution_params)
         draws = pm.draw(d, draws=10_000)
-    return az.plot_dist(draws)
+    return plot_density(draws)
 
 
 def savefig(filename):

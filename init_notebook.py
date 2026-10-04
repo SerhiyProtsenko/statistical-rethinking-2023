@@ -51,9 +51,13 @@ print(Fore.BLUE + watermark())
 print(Fore.BLUE + watermark(iversions=True, globals_=globals()))
 
 
-import warnings
-warnings.filterwarnings("ignore")
+# Keep the lectures' 94% highest-density intervals explicit. ArviZ 1 defaults
+# to equal-tail intervals and a different probability.
+az.rcParams["stats.ci_kind"] = "hdi"
+az.rcParams["stats.ci_prob"] = 0.94
+az.rcParams["stats.round_to"] = 3
 
 from matplotlib import style
-STYLE = "statistical-rethinking-2023.mplstyle"
+from pathlib import Path
+STYLE = Path(__file__).resolve().with_name("statistical-rethinking-2023.mplstyle")
 style.use(STYLE)
